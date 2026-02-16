@@ -2,6 +2,7 @@
 
 import { program } from "commander";
 import { execFileSync, execSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const runStatuses = [
@@ -420,6 +421,6 @@ Notes:
     printRuns(matches, opts.json);
   });
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   program.parse();
 }
