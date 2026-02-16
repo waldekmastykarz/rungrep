@@ -437,8 +437,8 @@ Notes:
         token
       );
     } catch (err) {
-      spinner.stop();
       if (err instanceof GitHubApiError) {
+        spinner.stop();
         process.stderr.write(formatApiError(err, opts.repo));
         process.exit(1);
       }
