@@ -58,6 +58,7 @@ interface CliOptions {
   status?: RunStatus;
   last: boolean;
   json: boolean;
+  open: boolean;
 }
 
 export function getToken(): string {
@@ -130,6 +131,36 @@ export async function fetchRuns(
   return data.workflow_runs;
 }
 
+const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function createSpinner(message: string) {
+  if (!process.stderr.isTTY) {
+    return { stop() {} };
+  }
+
+  let i = 0;
+  const id = setInterval(() => {
+    process.stderr.write(`\r${spinnerFrames[i++ % spinnerFrames.length]} ${message}`);
+  }, 80);
+
+  return {
+    stop() {
+      clearInterval(id);
+      process.stderr.write("\r\x1b[K");
+    },
+  };
+}
+
+export function openUrl(url: string): void {
+  const cmd =
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "win32"
+        ? "start"
+        : "xdg-open";
+  execSync(`${cmd} ${url}`, { stdio: "ignore" });
+}
+
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();
 }
@@ -174,7 +205,33 @@ program
     `Filter by status (${runStatuses.join(", ")})`
   )
   .option("-l, --last", "Return only the latest matching run", false)
+  .option("--open", "Open the run in browser (requires exactly one match)", false)
   .option("--json", "Output as JSON", false)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  rungrep "deploy" -r org/repo                  Search runs matching "deploy"
+  rungrep "deploy" -r org/repo -l --json        Latest matching run as JSON
+  rungrep "deploy" -r org/repo -l --open        Open latest matching run in browser
+  rungrep "fix" -r org/repo -s success          Only successful runs matching "fix"
+
+Auth:
+  Uses GITHUB_TOKEN env var, or falls back to \`gh auth token\`.
+
+JSON output schema:
+  [{ "name": "...", "date": "ISO-8601", "url": "https://..." }]
+
+Exit codes:
+  0  Matching runs found
+  1  No matches or workflow not found
+  2  Invalid input (bad repo format, bad status, missing auth)
+
+Notes:
+  Name matching is case-insensitive and partial (substring match).
+  Results are ordered newest-first. --last returns the single newest match.
+  Primary output goes to stdout; errors and progress to stderr.`
+  )
   .action(async (name: string, opts: CliOptions) => {
     if (opts.status && !runStatuses.includes(opts.status)) {
       process.stderr.write(
@@ -193,21 +250,28 @@ program
     const token = getToken();
     let workflowId: number | undefined;
 
-    if (opts.action) {
-      workflowId = await resolveWorkflowId(opts.repo, opts.action, token);
-      if (!workflowId) {
-        process.stderr.write(
-          `Error: Workflow "${opts.action}" not found in ${opts.repo}.\n`
-        );
-        process.exit(1);
-      }
-    }
+    const spinner = createSpinner("Searching runs…");
 
-    const runs = await fetchRuns(
-      opts.repo,
-      { branch: opts.branch, status: opts.status, workflowId },
-      token
-    );
+    try {
+      if (opts.action) {
+        workflowId = await resolveWorkflowId(opts.repo, opts.action, token);
+        if (!workflowId) {
+          spinner.stop();
+          process.stderr.write(
+            `Error: Workflow "${opts.action}" not found in ${opts.repo}.\n`
+          );
+          process.exit(1);
+        }
+      }
+
+      var runs = await fetchRuns(
+        opts.repo,
+        { branch: opts.branch, status: opts.status, workflowId },
+        token
+      );
+    } finally {
+      spinner.stop();
+    }
 
     const needle = name.toLowerCase();
     let matches = runs.filter((r) =>
@@ -221,6 +285,20 @@ program
 
     if (opts.last) {
       matches = [matches[0]];
+    }
+
+    if (opts.open) {
+      if (matches.length === 1) {
+        printRuns(matches, opts.json);
+        openUrl(matches[0].html_url);
+        return;
+      }
+
+      process.stderr.write(
+        `Error: --open requires exactly one match, but found ${matches.length}.\n`
+      );
+      printRuns(matches, opts.json);
+      process.exit(1);
     }
 
     printRuns(matches, opts.json);
