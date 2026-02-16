@@ -2,6 +2,19 @@
   "name": "rungrep",
   "version": "0.1.0",
   "description": "Find GitHub workflow runs by partial name",
+  "author": "Waldek Mastykarz",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waldekmastykarz/rungrep.git"
+  },
+  "keywords": [
+    "github",
+    "actions",
+    "workflow",
+    "runs",
+    "cli"
+  ],
   "type": "module",
   "files": [
     "dist/index.js",
@@ -14,7 +27,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
     "commander": "^13.1.0"
