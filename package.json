@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/waldekmastykarz/rungrep.git"
+    "url": "git+https://github.com/waldekmastykarz/rungrep.git"
   },
   "keywords": [
     "github",
@@ -21,10 +21,10 @@
     "dist/index.d.ts"
   ],
   "bin": {
-    "rungrep": "./dist/index.js"
+    "rungrep": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
