@@ -56,6 +56,8 @@ interface CliOptions {
   branch?: string;
   action?: string;
   status?: RunStatus;
+  top?: string;
+  since?: string;
   last: boolean;
   json: boolean;
   open: boolean;
@@ -68,6 +70,36 @@ function debug(msg: string): void {
   if (debugEnabled) {
     process.stderr.write(`[debug] ${msg}\n`);
   }
+}
+
+export function parseSince(value: string): Date {
+  const match = value.match(/^(\d+)([hdw])$/);
+  if (match) {
+    const amount = parseInt(match[1], 10);
+    const unit = match[2];
+    const now = new Date();
+    switch (unit) {
+      case "h":
+        now.setHours(now.getHours() - amount);
+        break;
+      case "d":
+        now.setDate(now.getDate() - amount);
+        break;
+      case "w":
+        now.setDate(now.getDate() - amount * 7);
+        break;
+    }
+    return now;
+  }
+
+  const date = new Date(value);
+  if (isNaN(date.getTime())) {
+    process.stderr.write(
+      `Error: Invalid --since value "${value}". Use a duration (7d, 24h, 2w) or date (2026-02-01).\n`
+    );
+    process.exit(2);
+  }
+  return date;
 }
 
 export function getToken(): string {
@@ -128,12 +160,13 @@ export async function resolveWorkflowId(
 
 export async function fetchRuns(
   repo: string,
-  opts: { branch?: string; status?: RunStatus; workflowId?: number },
+  opts: { branch?: string; status?: RunStatus; workflowId?: number; since?: Date },
   token: string
 ): Promise<WorkflowRun[]> {
   const params = new URLSearchParams();
   if (opts.branch) params.set("branch", opts.branch);
   if (opts.status) params.set("status", opts.status);
+  if (opts.since) params.set("created", `>=${opts.since.toISOString().split("T")[0]}`);
   params.set("per_page", "100");
 
   const basePath = opts.workflowId
@@ -150,7 +183,20 @@ export async function fetchRuns(
 
     const data = await ghFetch<WorkflowRunsResponse>(path, token);
     debug(`Page ${page}: fetched ${data.workflow_runs.length} runs (total_count: ${data.total_count})`);
-    allRuns.push(...data.workflow_runs);
+
+    if (opts.since) {
+      const cutoff = opts.since.getTime();
+      for (const run of data.workflow_runs) {
+        if (new Date(run.created_at).getTime() < cutoff) {
+          debug(`Stopping pagination: run ${run.id} older than --since cutoff`);
+          debug(`Total fetched: ${allRuns.length} runs`);
+          return allRuns;
+        }
+        allRuns.push(run);
+      }
+    } else {
+      allRuns.push(...data.workflow_runs);
+    }
 
     if (data.workflow_runs.length < 100) break;
     page++;
@@ -233,7 +279,12 @@ program
     "-s, --status <status>",
     `Filter by status (${runStatuses.join(", ")})`
   )
+  .option("-t, --top <n>", "Return top N matching runs")
   .option("-l, --last", "Return only the latest matching run", false)
+  .option(
+    "--since <duration|date>",
+    "Only search runs newer than duration (7d, 24h, 2w) or date (2026-02-01). Default: 7d"
+  )
   .option("--open", "Open the run in browser (requires exactly one match)", false)
   .option("--json", "Output as JSON", false)
   .option("--debug", "Show diagnostic info on stderr", false)
@@ -241,7 +292,9 @@ program
     "after",
     `
 Examples:
-  rungrep "deploy" -r org/repo                  Search runs matching "deploy"
+  rungrep "deploy" -r org/repo                  Search runs matching "deploy" (last 7 days)
+  rungrep "deploy" -r org/repo --since 30d      Search runs from last 30 days
+  rungrep "deploy" -r org/repo -t 5             Top 5 matching runs
   rungrep "deploy" -r org/repo -l --json        Latest matching run as JSON
   rungrep "deploy" -r org/repo -l --open        Open latest matching run in browser
   rungrep "fix" -r org/repo -s success          Only successful runs matching "fix"
@@ -271,6 +324,8 @@ Notes:
       if (opts.branch) debug(`branch: ${opts.branch}`);
       if (opts.action) debug(`action: ${opts.action}`);
       if (opts.status) debug(`status: ${opts.status}`);
+      if (opts.top) debug(`top: ${opts.top}`);
+      debug(`since: ${opts.since ?? "7d (default)"}`);
     }
 
     if (opts.status && !runStatuses.includes(opts.status)) {
@@ -285,6 +340,23 @@ Notes:
         `Error: Invalid repo format "${opts.repo}". Expected org/repo.\n`
       );
       process.exit(2);
+    }
+
+    let top: number | undefined;
+    if (opts.top) {
+      top = parseInt(opts.top, 10);
+      if (isNaN(top) || top < 1) {
+        process.stderr.write(
+          `Error: Invalid --top value "${opts.top}". Must be a positive integer.\n`
+        );
+        process.exit(2);
+      }
+    }
+
+    const sinceValue = opts.since ?? (top ? undefined : "7d");
+    const sinceDate = sinceValue ? parseSince(sinceValue) : undefined;
+    if (sinceDate) {
+      debug(`Since cutoff: ${sinceDate.toISOString()}`);
     }
 
     const token = getToken();
@@ -306,7 +378,7 @@ Notes:
 
       var runs = await fetchRuns(
         opts.repo,
-        { branch: opts.branch, status: opts.status, workflowId },
+        { branch: opts.branch, status: opts.status, workflowId, since: sinceDate },
         token
       );
     } finally {
@@ -327,6 +399,8 @@ Notes:
 
     if (opts.last) {
       matches = [matches[0]];
+    } else if (top) {
+      matches = matches.slice(0, top);
     }
 
     if (opts.open) {

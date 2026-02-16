@@ -7,6 +7,7 @@ import {
   getToken,
   ghFetch,
   runStatuses,
+  parseSince,
 } from "./index.js";
 import type { RunStatus } from "./index.js";
 
@@ -240,6 +241,44 @@ describe("fetchRuns", () => {
     expect(calledUrl).toContain("status=success");
   });
 
+  it("passes created filter to API when since is provided", async () => {
+    mockFetch([]);
+    const since = new Date("2026-02-01T00:00:00Z");
+
+    await fetchRuns("org/repo", { since }, "token");
+
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(calledUrl).toContain("created=%3E%3D2026-02-01");
+  });
+
+  it("stops paginating when a run is older than since cutoff", async () => {
+    const recentRun = makeRun({
+      id: 1,
+      created_at: "2026-02-15T10:00:00Z",
+    });
+    const oldRun = makeRun({
+      id: 2,
+      created_at: "2026-01-01T10:00:00Z",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            total_count: 2,
+            workflow_runs: [recentRun, oldRun],
+          }),
+      })
+    );
+
+    const since = new Date("2026-02-01T00:00:00Z");
+    const result = await fetchRuns("org/repo", { since }, "token");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(1);
+  });
+
   it("uses workflow-specific endpoint when workflowId is provided", async () => {
     mockFetch([]);
 
@@ -330,6 +369,39 @@ describe("input validation", () => {
     expect(
       runStatuses.includes("bogus" as unknown as RunStatus)
     ).toBe(false);
+  });
+});
+
+// ── parseSince ───────────────────────────────────────────
+
+describe("parseSince", () => {
+  it("parses days duration", () => {
+    const before = new Date();
+    before.setDate(before.getDate() - 7);
+    const result = parseSince("7d");
+    // Allow 1 second tolerance
+    expect(Math.abs(result.getTime() - before.getTime())).toBeLessThan(1000);
+  });
+
+  it("parses hours duration", () => {
+    const before = new Date();
+    before.setHours(before.getHours() - 24);
+    const result = parseSince("24h");
+    expect(Math.abs(result.getTime() - before.getTime())).toBeLessThan(1000);
+  });
+
+  it("parses weeks duration", () => {
+    const before = new Date();
+    before.setDate(before.getDate() - 14);
+    const result = parseSince("2w");
+    expect(Math.abs(result.getTime() - before.getTime())).toBeLessThan(1000);
+  });
+
+  it("parses absolute date string", () => {
+    const result = parseSince("2026-02-01");
+    expect(result.getFullYear()).toBe(2026);
+    expect(result.getMonth()).toBe(1); // 0-indexed
+    expect(result.getDate()).toBe(1);
   });
 });
 
