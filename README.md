@@ -29,6 +29,15 @@ rungrep "deploy" -r org/repo -b main -l
 # Filter by workflow and status
 rungrep "deploy" -r org/repo -a "CI" -s success
 
+# Top 5 matching runs
+rungrep "deploy" -r org/repo -t 5
+
+# Search runs from last 30 days (default: 7d)
+rungrep "deploy" -r org/repo --since 30d
+
+# Open latest matching run in browser
+rungrep "deploy" -r org/repo -l --open
+
 # JSON output — pipe to jq, use in scripts
 rungrep "deploy" -r org/repo -l --json
 ```
@@ -50,8 +59,12 @@ rungrep <name> --repo <org/repo> [options]
 | `-b, --branch <branch>` | Filter by branch |
 | `-a, --action <workflow>` | Filter by workflow name |
 | `-s, --status <status>` | Filter by run status (see below) |
+| `-t, --top <n>` | Return top N matching runs |
 | `-l, --last` | Return only the latest match |
+| `--since <duration\|date>` | Only search runs newer than duration (`7d`, `24h`, `2w`) or date (`2026-02-01`). Default: `7d` |
+| `--open` | Open the run in browser (requires exactly one match, or combine with `-l`) |
 | `--json` | Output as JSON |
+| `--debug` | Show diagnostic info on stderr |
 
 <details>
 <summary>Valid statuses</summary>
