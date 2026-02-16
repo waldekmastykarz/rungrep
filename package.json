@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Find GitHub workflow runs by partial name",
   "type": "module",
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts"
+  ],
   "bin": {
     "rungrep": "./dist/index.js"
   },
