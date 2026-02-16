@@ -59,13 +59,26 @@ interface CliOptions {
   last: boolean;
   json: boolean;
   open: boolean;
+  debug: boolean;
+}
+
+let debugEnabled = false;
+
+function debug(msg: string): void {
+  if (debugEnabled) {
+    process.stderr.write(`[debug] ${msg}\n`);
+  }
 }
 
 export function getToken(): string {
   const envToken = process.env.GITHUB_TOKEN;
-  if (envToken) return envToken;
+  if (envToken) {
+    debug("Auth: using GITHUB_TOKEN env var");
+    return envToken;
+  }
 
   try {
+    debug("Auth: falling back to `gh auth token`");
     return execSync("gh auth token", { encoding: "utf-8" }).trim();
   } catch {
     process.stderr.write(
@@ -78,6 +91,7 @@ export function getToken(): string {
 
 export async function ghFetch<T>(path: string, token: string): Promise<T> {
   const url = `https://api.github.com${path}`;
+  debug(`GET ${url}`);
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -85,6 +99,8 @@ export async function ghFetch<T>(path: string, token: string): Promise<T> {
       "X-GitHub-Api-Version": "2022-11-28",
     },
   });
+
+  debug(`Response: ${res.status} ${res.statusText}`);
 
   if (!res.ok) {
     const body = await res.text();
@@ -124,11 +140,24 @@ export async function fetchRuns(
     ? `/repos/${repo}/actions/workflows/${opts.workflowId}/runs`
     : `/repos/${repo}/actions/runs`;
 
-  const qs = params.toString();
-  const path = qs ? `${basePath}?${qs}` : basePath;
+  const allRuns: WorkflowRun[] = [];
+  let page = 1;
 
-  const data = await ghFetch<WorkflowRunsResponse>(path, token);
-  return data.workflow_runs;
+  while (true) {
+    params.set("page", String(page));
+    const qs = params.toString();
+    const path = `${basePath}?${qs}`;
+
+    const data = await ghFetch<WorkflowRunsResponse>(path, token);
+    debug(`Page ${page}: fetched ${data.workflow_runs.length} runs (total_count: ${data.total_count})`);
+    allRuns.push(...data.workflow_runs);
+
+    if (data.workflow_runs.length < 100) break;
+    page++;
+  }
+
+  debug(`Total fetched: ${allRuns.length} runs`);
+  return allRuns;
 }
 
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -207,6 +236,7 @@ program
   .option("-l, --last", "Return only the latest matching run", false)
   .option("--open", "Open the run in browser (requires exactly one match)", false)
   .option("--json", "Output as JSON", false)
+  .option("--debug", "Show diagnostic info on stderr", false)
   .addHelpText(
     "after",
     `
@@ -233,6 +263,16 @@ Notes:
   Primary output goes to stdout; errors and progress to stderr.`
   )
   .action(async (name: string, opts: CliOptions) => {
+    debugEnabled = opts.debug;
+
+    if (opts.debug) {
+      debug(`name: "${name}"`);
+      debug(`repo: ${opts.repo}`);
+      if (opts.branch) debug(`branch: ${opts.branch}`);
+      if (opts.action) debug(`action: ${opts.action}`);
+      if (opts.status) debug(`status: ${opts.status}`);
+    }
+
     if (opts.status && !runStatuses.includes(opts.status)) {
       process.stderr.write(
         `Error: Invalid status "${opts.status}". Valid values: ${runStatuses.join(", ")}\n`
@@ -274,9 +314,11 @@ Notes:
     }
 
     const needle = name.toLowerCase();
+    debug(`Filtering ${runs.length} runs for "${needle}"`);
     let matches = runs.filter((r) =>
       r.display_title.toLowerCase().includes(needle)
     );
+    debug(`Found ${matches.length} matching runs`);
 
     if (matches.length === 0) {
       process.stderr.write("No matching runs found.\n");

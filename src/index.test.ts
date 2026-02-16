@@ -182,6 +182,44 @@ describe("fetchRuns", () => {
     const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(calledUrl).toContain("/repos/org/repo/actions/runs");
     expect(calledUrl).toContain("per_page=100");
+    expect(calledUrl).toContain("page=1");
+  });
+
+  it("paginates until a page returns fewer than 100 runs", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) =>
+      makeRun({ id: i + 1 })
+    );
+    const lastPage = [makeRun({ id: 101 }), makeRun({ id: 102 })];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_count: 102,
+              workflow_runs: fullPage,
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_count: 102,
+              workflow_runs: lastPage,
+            }),
+        })
+    );
+
+    const result = await fetchRuns("org/repo", {}, "token");
+    expect(result).toHaveLength(102);
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    const firstUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(firstUrl).toContain("page=1");
+    const secondUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[1][0];
+    expect(secondUrl).toContain("page=2");
   });
 
   it("includes branch filter in query params", async () => {
