@@ -1,6 +1,6 @@
 {
   "name": "rungrep",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Find GitHub workflow runs by partial name",
   "author": "Waldek Mastykarz",
   "license": "MIT",
