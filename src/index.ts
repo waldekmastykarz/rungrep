@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { program } from "commander";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const runStatuses = [
@@ -158,7 +158,7 @@ export function openUrl(url: string): void {
       : process.platform === "win32"
         ? "start"
         : "xdg-open";
-  execSync(`${cmd} ${url}`, { stdio: "ignore" });
+  execFileSync(cmd, [url], { stdio: "ignore" });
 }
 
 export function formatDate(iso: string): string {
