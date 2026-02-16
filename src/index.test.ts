@@ -8,6 +8,8 @@ import {
   ghFetch,
   runStatuses,
   parseSince,
+  GitHubApiError,
+  formatApiError,
 } from "./index.js";
 import type { RunStatus } from "./index.js";
 
@@ -136,7 +138,7 @@ describe("ghFetch", () => {
     );
   });
 
-  it("throws on non-ok responses", async () => {
+  it("throws GitHubApiError on non-ok responses", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -148,7 +150,45 @@ describe("ghFetch", () => {
 
     await expect(
       ghFetch("/repos/org/repo/actions/runs", "token")
+    ).rejects.toThrow(GitHubApiError);
+
+    await expect(
+      ghFetch("/repos/org/repo/actions/runs", "token")
     ).rejects.toThrow("GitHub API 404: Not Found");
+  });
+});
+
+// ── formatApiError ───────────────────────────────────────
+
+describe("formatApiError", () => {
+  it("formats 404 with repo-not-found message and suggestions", () => {
+    const err = new GitHubApiError(404, "Not Found", "/repos/org/repo/actions/runs");
+    const msg = formatApiError(err, "org/repo");
+    expect(msg).toContain('Repository "org/repo" not found');
+    expect(msg).toContain("Check the repository name for typos");
+    expect(msg).toContain("Verify that the repository exists");
+    expect(msg).toContain("token has access");
+  });
+
+  it("formats 401 with authentication failure message", () => {
+    const err = new GitHubApiError(401, "Bad credentials", "/repos/org/repo/actions/runs");
+    const msg = formatApiError(err, "org/repo");
+    expect(msg).toContain('Authentication failed for repository "org/repo"');
+    expect(msg).toContain("GITHUB_TOKEN is valid");
+  });
+
+  it("formats 403 with access denied message", () => {
+    const err = new GitHubApiError(403, "Forbidden", "/repos/org/repo/actions/runs");
+    const msg = formatApiError(err, "org/repo");
+    expect(msg).toContain('Access denied to repository "org/repo"');
+    expect(msg).toContain("'repo' scope");
+  });
+
+  it("formats unknown status codes with generic message", () => {
+    const err = new GitHubApiError(500, "Internal Server Error", "/repos/org/repo/actions/runs");
+    const msg = formatApiError(err, "org/repo");
+    expect(msg).toContain("status 500");
+    expect(msg).toContain("org/repo");
   });
 });
 

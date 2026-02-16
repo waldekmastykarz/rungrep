@@ -65,6 +65,60 @@ interface CliOptions {
   debug: boolean;
 }
 
+export class GitHubApiError extends Error {
+  public readonly status: number;
+  public readonly path: string;
+
+  constructor(status: number, body: string, path: string) {
+    super(`GitHub API ${status}: ${body}`);
+    this.name = "GitHubApiError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
+export function formatApiError(err: GitHubApiError, repo: string): string {
+  const lines: string[] = [];
+
+  switch (err.status) {
+    case 401:
+      lines.push(
+        `Error: Authentication failed for repository "${repo}".`,
+        "Suggestions:",
+        "  - Verify that your GITHUB_TOKEN is valid and not expired",
+        "  - Run `gh auth status` to check your GitHub CLI authentication",
+        "  - Generate a new token at https://github.com/settings/tokens"
+      );
+      break;
+    case 403:
+      lines.push(
+        `Error: Access denied to repository "${repo}".`,
+        "Suggestions:",
+        "  - Check that your token has the 'repo' scope (or 'actions:read' for fine-grained tokens)",
+        "  - Verify that you have access to this repository",
+        "  - If using a fine-grained token, ensure it is authorized for this repository"
+      );
+      break;
+    case 404:
+      lines.push(
+        `Error: Repository "${repo}" not found.`,
+        "Suggestions:",
+        "  - Check the repository name for typos (expected format: owner/repo)",
+        "  - Verify that the repository exists on GitHub",
+        "  - If the repository is private, ensure your token has access to it"
+      );
+      break;
+    default:
+      lines.push(
+        `Error: GitHub API responded with status ${err.status} for repository "${repo}".`,
+        `Details: ${err.message}`
+      );
+      break;
+  }
+
+  return lines.join("\n") + "\n";
+}
+
 let debugEnabled = false;
 
 function debug(msg: string): void {
@@ -137,7 +191,7 @@ export async function ghFetch<T>(path: string, token: string): Promise<T> {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${body}`);
+    throw new GitHubApiError(res.status, body, path);
   }
 
   return res.json() as Promise<T>;
@@ -382,6 +436,13 @@ Notes:
         { branch: opts.branch, status: opts.status, workflowId, since: sinceDate },
         token
       );
+    } catch (err) {
+      spinner.stop();
+      if (err instanceof GitHubApiError) {
+        process.stderr.write(formatApiError(err, opts.repo));
+        process.exit(1);
+      }
+      throw err;
     } finally {
       spinner.stop();
     }
