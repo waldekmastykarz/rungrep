@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-19
+
 ### Added
 
 - Bypass GitHub API 1000-run cap with sliding time windows
