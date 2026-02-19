@@ -18,7 +18,8 @@
   "type": "module",
   "files": [
     "dist/index.js",
-    "dist/index.d.ts"
+    "dist/index.d.ts",
+    "CHANGELOG.md"
   ],
   "bin": {
     "rungrep": "dist/index.js"
