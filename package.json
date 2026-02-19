@@ -31,7 +31,8 @@
     "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
-    "commander": "^14.0.3"
+    "commander": "^14.0.3",
+    "ora": "^9.3.0"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",

@@ -4,6 +4,7 @@ import { program } from "commander";
 import { execFileSync, execSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import ora from "ora";
 
 export const runStatuses = [
   "completed",
@@ -216,70 +217,90 @@ export async function resolveWorkflowId(
 export async function fetchRuns(
   repo: string,
   opts: { branch?: string; status?: RunStatus; workflowId?: number; since?: Date },
-  token: string
+  token: string,
+  onProgress?: (fetched: number, total: number) => void
 ): Promise<WorkflowRun[]> {
-  const params = new URLSearchParams();
-  if (opts.branch) params.set("branch", opts.branch);
-  if (opts.status) params.set("status", opts.status);
-  if (opts.since) params.set("created", `>=${opts.since.toISOString().split("T")[0]}`);
-  params.set("per_page", "100");
-
   const basePath = opts.workflowId
     ? `/repos/${repo}/actions/workflows/${opts.workflowId}/runs`
     : `/repos/${repo}/actions/runs`;
 
   const allRuns: WorkflowRun[] = [];
-  let page = 1;
+  const seenIds = new Set<number>();
+  let upperBound: string | undefined;
+  let overallTotal = 0;
 
   while (true) {
-    params.set("page", String(page));
-    const qs = params.toString();
-    const path = `${basePath}?${qs}`;
+    const params = new URLSearchParams();
+    if (opts.branch) params.set("branch", opts.branch);
+    if (opts.status) params.set("status", opts.status);
+    params.set("per_page", "100");
 
-    const data = await ghFetch<WorkflowRunsResponse>(path, token);
-    debug(`Page ${page}: fetched ${data.workflow_runs.length} runs (total_count: ${data.total_count})`);
-
-    if (opts.since) {
-      const cutoff = opts.since.getTime();
-      for (const run of data.workflow_runs) {
-        if (new Date(run.created_at).getTime() < cutoff) {
-          debug(`Stopping pagination: run ${run.id} older than --since cutoff`);
-          debug(`Total fetched: ${allRuns.length} runs`);
-          return allRuns;
-        }
-        allRuns.push(run);
-      }
-    } else {
-      allRuns.push(...data.workflow_runs);
+    const sincePart = opts.since?.toISOString();
+    if (sincePart && upperBound) {
+      params.set("created", `${sincePart}..${upperBound}`);
+    } else if (sincePart) {
+      params.set("created", `>=${sincePart}`);
+    } else if (upperBound) {
+      params.set("created", `<=${upperBound}`);
     }
 
-    if (data.workflow_runs.length < 100) break;
-    page++;
+    let batchNewRuns = 0;
+    let batchSkipped = 0;
+    let maxTotalCount = 0;
+    let page = 1;
+    let hitSinceCutoff = false;
+
+    while (true) {
+      params.set("page", String(page));
+      const path = `${basePath}?${params.toString()}`;
+
+      const data = await ghFetch<WorkflowRunsResponse>(path, token);
+      if (data.total_count > maxTotalCount) maxTotalCount = data.total_count;
+      if (maxTotalCount > overallTotal) overallTotal = maxTotalCount;
+      debug(`Page ${page}: fetched ${data.workflow_runs.length} runs (total_count: ${data.total_count})`);
+      onProgress?.(allRuns.length, overallTotal);
+
+      for (const run of data.workflow_runs) {
+        if (opts.since && new Date(run.created_at).getTime() < opts.since.getTime()) {
+          debug(`Stopping pagination: run ${run.id} older than --since cutoff`);
+          hitSinceCutoff = true;
+          break;
+        }
+        if (!seenIds.has(run.id)) {
+          seenIds.add(run.id);
+          allRuns.push(run);
+          batchNewRuns++;
+        } else {
+          batchSkipped++;
+        }
+      }
+
+      if (hitSinceCutoff) break;
+      if (data.workflow_runs.length < 100) break;
+      page++;
+    }
+
+    debug(`Batch: ${batchNewRuns} new, ${batchSkipped} duplicates skipped`);
+
+    if (maxTotalCount <= 1000 || hitSinceCutoff) break;
+    if (batchNewRuns === 0) break;
+
+    let oldestTime = Infinity;
+    for (const run of allRuns) {
+      const t = new Date(run.created_at).getTime();
+      if (t < oldestTime) oldestTime = t;
+    }
+    const oldestDate = new Date(oldestTime);
+    oldestDate.setSeconds(oldestDate.getSeconds() - 1);
+    upperBound = oldestDate.toISOString();
+    debug(`Sliding window: upper bound set to ${upperBound}`);
   }
 
   debug(`Total fetched: ${allRuns.length} runs`);
   return allRuns;
 }
 
-const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-function createSpinner(message: string) {
-  if (!process.stderr.isTTY) {
-    return { stop() {} };
-  }
-
-  let i = 0;
-  const id = setInterval(() => {
-    process.stderr.write(`\r${spinnerFrames[i++ % spinnerFrames.length]} ${message}`);
-  }, 80);
-
-  return {
-    stop() {
-      clearInterval(id);
-      process.stderr.write("\r\x1b[K");
-    },
-  };
-}
 
 export function openUrl(url: string): void {
   const cmd =
@@ -417,7 +438,7 @@ Notes:
     const token = getToken();
     let workflowId: number | undefined;
 
-    const spinner = createSpinner("Searching runs…");
+    const spinner = ora({ text: "Searching runs…", stream: process.stderr }).start();
 
     try {
       if (opts.action) {
@@ -434,11 +455,14 @@ Notes:
       var runs = await fetchRuns(
         opts.repo,
         { branch: opts.branch, status: opts.status, workflowId, since: sinceDate },
-        token
+        token,
+        (fetched, total) => {
+          spinner.text = `Searching runs… ${fetched}/${total}`;
+        }
       );
     } catch (err) {
       if (err instanceof GitHubApiError) {
-        spinner.stop();
+        spinner.fail();
         process.stderr.write(formatApiError(err, opts.repo));
         process.exit(1);
       }

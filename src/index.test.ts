@@ -288,7 +288,7 @@ describe("fetchRuns", () => {
     await fetchRuns("org/repo", { since }, "token");
 
     const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(calledUrl).toContain("created=%3E%3D2026-02-01");
+    expect(calledUrl).toContain("created=%3E%3D2026-02-01T00%3A00%3A00.000Z");
   });
 
   it("stops paginating when a run is older than since cutoff", async () => {
@@ -326,6 +326,186 @@ describe("fetchRuns", () => {
 
     const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(calledUrl).toContain("/repos/org/repo/actions/workflows/42/runs");
+  });
+
+  it("slides time window when hitting 1000-run API cap", async () => {
+    const batch1 = Array.from({ length: 100 }, (_, i) =>
+      makeRun({ id: i + 1, created_at: "2026-02-10T10:00:00Z" })
+    );
+    const batch2 = [makeRun({ id: 1001, created_at: "2026-02-05T10:00:00Z" })];
+
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        callCount++;
+        // First 10 pages return 100 runs each (simulates 1000-run cap)
+        if (callCount <= 10) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                total_count: 1100,
+                workflow_runs: batch1,
+              }),
+          });
+        }
+        // Page 11 returns 0 runs with total_count: 0 (real API behavior at cap)
+        if (callCount === 11) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                total_count: 0,
+                workflow_runs: [],
+              }),
+          });
+        }
+        // Second batch (after sliding window)
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_count: 1,
+              workflow_runs: batch2,
+            }),
+        });
+      })
+    );
+
+    const stderrChunks: string[] = [];
+    const origStderr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => {
+      stderrChunks.push(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      const result = await fetchRuns("org/repo", {}, "token");
+      // 100 unique runs from batch1 + 1 from batch2
+      expect(result).toHaveLength(101);
+      expect(result[result.length - 1].id).toBe(1001);
+
+      // Second batch should use created<= full ISO timestamp (minus 1 second)
+      const lastCallUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[
+        (fetch as ReturnType<typeof vi.fn>).mock.calls.length - 1
+      ][0];
+      expect(lastCallUrl).toMatch(/created=%3C%3D2026-02-10T/);
+    } finally {
+      process.stderr.write = origStderr;
+    }
+  });
+
+  it("uses date range filter when sliding window with since", async () => {
+    const batch1 = Array.from({ length: 100 }, (_, i) =>
+      makeRun({ id: i + 1, created_at: "2026-02-10T10:00:00Z" })
+    );
+
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount <= 10) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                total_count: 1100,
+                workflow_runs: batch1,
+              }),
+          });
+        }
+        if (callCount === 11) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                total_count: 1100,
+                workflow_runs: [],
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_count: 0,
+              workflow_runs: [],
+            }),
+        });
+      })
+    );
+
+    const origStderr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+
+    try {
+      const since = new Date("2026-02-01T00:00:00Z");
+      await fetchRuns("org/repo", { since }, "token");
+
+      // After sliding window, should use range filter: since..upperBound (both full ISO timestamps)
+      const lastCallUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[
+        (fetch as ReturnType<typeof vi.fn>).mock.calls.length - 1
+      ][0];
+      expect(lastCallUrl).toMatch(/created=2026-02-01T.*\.\.2026-02-10T/);
+    } finally {
+      process.stderr.write = origStderr;
+    }
+  });
+
+  it("deduplicates runs across sliding window batches", async () => {
+    const sharedRuns = Array.from({ length: 100 }, (_, i) =>
+      makeRun({ id: i + 1, created_at: "2026-02-10T10:00:00Z" })
+    );
+
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount <= 10) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                total_count: 1100,
+                workflow_runs: sharedRuns,
+              }),
+          });
+        }
+        if (callCount === 11) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                total_count: 1100,
+                workflow_runs: [],
+              }),
+          });
+        }
+        // Second batch returns same IDs (overlap on date boundary)
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_count: 50,
+              workflow_runs: sharedRuns.slice(0, 50),
+            }),
+        });
+      })
+    );
+
+    const origStderr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+
+    try {
+      const result = await fetchRuns("org/repo", {}, "token");
+      // Should only have 100 unique runs, not 150
+      expect(result).toHaveLength(100);
+    } finally {
+      process.stderr.write = origStderr;
+    }
   });
 });
 
