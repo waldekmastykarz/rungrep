@@ -61,9 +61,52 @@ STOP — Ask the user to confirm before proceeding. Present:
 
 Do NOT proceed until explicit confirmation.
 
-### Step 5: Apply the Version Bump
+### Step 5: Update the Changelog
 
-Once confirmed, run:
+STOP — This step MUST happen before `npm version` so the changelog is included in the version commit.
+
+1. Read `CHANGELOG.md` from the project root.
+2. Take everything under the `## [Unreleased]` heading and move it into a new version section.
+3. The new section heading must be `## [<new-version>] - <YYYY-MM-DD>` (today's date).
+4. Leave `## [Unreleased]` in place but empty (no subsections, no items) so it's ready for future changes.
+5. Do NOT change any existing version sections below.
+
+Example before:
+
+```markdown
+## [Unreleased]
+
+### Added
+
+- New feature X
+
+## [0.2.0] - 2026-02-16
+```
+
+Example after (bumping to 0.3.0 on 2026-02-19):
+
+```markdown
+## [Unreleased]
+
+## [0.3.0] - 2026-02-19
+
+### Added
+
+- New feature X
+
+## [0.2.0] - 2026-02-16
+```
+
+6. Commit the changelog update along with any other pending changes:
+
+```bash
+git add CHANGELOG.md
+git commit -m "Update changelog for <new-version>"
+```
+
+### Step 6: Apply the Version Bump
+
+Once the changelog is committed, run:
 
 ```bash
 npm version <major|minor|patch>
@@ -76,7 +119,7 @@ This command:
 
 If `npm version` fails due to uncommitted changes, inform the user and suggest committing or stashing changes first.
 
-### Step 6: Report Result
+### Step 7: Report Result
 
 After successful bump, report:
 - The new version number
