@@ -11,6 +11,8 @@ NAME                          DATE                   URL
 deploy api to production v3   2/15/2026, 8:22:45 PM  https://github.com/myorg/backend/actions/runs/22041593851
 ```
 
+![Dark-themed terminal window on a desktop showing rungrep searching GitHub Actions runs in the dotnet/dev-proxy repository. The command shown is npx rungrep winget -r dotnet/dev-proxy. Below it, results are displayed in columns labeled NAME URL and DATE, with several matching workflow runs such as Update Copilot instructions for winget release process and add publish-to-winget skill documentation, followed by GitHub Actions run links and timestamps from 5/14/2026 and 5/15/2026. The scene has a clean, technical, focused tone, with the terminal centered against a blurred desktop background.](assets/screenshot.png)
+
 ## Install
 
 ```bash
